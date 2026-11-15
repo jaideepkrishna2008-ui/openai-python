@@ -6,7 +6,7 @@ import httpx2
 import pytest
 import pydantic
 
-from openai import OpenAI, BaseModel, AsyncOpenAI
+from openai import OpenAI, BaseModel, AsyncOpenAI, APIResponseValidationError
 from openai._response import (
     APIResponse,
     BaseAPIResponse,
@@ -326,3 +326,158 @@ async def test_async_response_parse_expect_model_union_non_json_content(async_cl
     obj = await response.parse(to=cast(Any, Union[CustomModel, OtherModel]))
     assert isinstance(obj, str)
     assert obj == "foo"
+
+
+JSON_CONTENT_TYPES = [
+    "application/json",
+    "Application/JSON",
+    "application/JSON",
+    "APPLICATION/JSON; CHARSET=UTF-8",
+    "application/json ; charset=utf-8",
+    "application/json\t; charset=utf-8",
+    "  application/json  ; charset=utf-8",
+    "application/json   ; charset=utf-8",
+    "application/json ; charset=utf-8 ; version=1",
+    "application/problem+json",
+    "application/problem+json ; charset=utf-8",
+    "application/vnd.api+json",
+    "application/vnd.api+json ; charset=utf-8",
+    "APPLICATION/PROBLEM+JSON ; CHARSET=UTF-8",
+]
+
+
+@pytest.mark.parametrize("content_type", JSON_CONTENT_TYPES)
+def test_response_parse_content_type_normalization_dict(client: OpenAI, content_type: str) -> None:
+    response = APIResponse(
+        raw=httpx2.Response(
+            200,
+            content=json.dumps({"message": "success", "count": 42}),
+            headers={"Content-Type": content_type},
+        ),
+        client=client,
+        stream=False,
+        stream_cls=None,
+        cast_to=dict,
+        options=FinalRequestOptions.construct(method="get", url="/foo"),
+    )
+
+    result = response.parse()
+    assert isinstance(result, dict)
+    assert result == {"message": "success", "count": 42}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_type", JSON_CONTENT_TYPES)
+async def test_async_response_parse_content_type_normalization_dict(
+    async_client: AsyncOpenAI, content_type: str
+) -> None:
+    response = AsyncAPIResponse(
+        raw=httpx2.Response(
+            200,
+            content=json.dumps({"message": "success", "count": 42}),
+            headers={"Content-Type": content_type},
+        ),
+        client=async_client,
+        stream=False,
+        stream_cls=None,
+        cast_to=dict,
+        options=FinalRequestOptions.construct(method="get", url="/foo"),
+    )
+
+    result = await response.parse()
+    assert isinstance(result, dict)
+    assert result == {"message": "success", "count": 42}
+
+
+@pytest.mark.parametrize("content_type", JSON_CONTENT_TYPES)
+def test_response_parse_content_type_normalization_list(client: OpenAI, content_type: str) -> None:
+    response = APIResponse(
+        raw=httpx2.Response(
+            200,
+            content=json.dumps(["item1", "item2"]),
+            headers={"Content-Type": content_type},
+        ),
+        client=client,
+        stream=False,
+        stream_cls=None,
+        cast_to=list,
+        options=FinalRequestOptions.construct(method="get", url="/foo"),
+    )
+
+    result = response.parse()
+    assert isinstance(result, list)
+    assert result == ["item1", "item2"]
+
+
+@pytest.mark.parametrize("content_type", JSON_CONTENT_TYPES)
+def test_response_parse_content_type_normalization_custom_model(client: OpenAI, content_type: str) -> None:
+    response = APIResponse(
+        raw=httpx2.Response(
+            200,
+            content=json.dumps({"foo": "hello!", "bar": 2}),
+            headers={"Content-Type": content_type},
+        ),
+        client=client,
+        stream=False,
+        stream_cls=None,
+        cast_to=str,
+        options=FinalRequestOptions.construct(method="get", url="/foo"),
+    )
+
+    obj = response.parse(to=CustomModel)
+    assert isinstance(obj, CustomModel)
+    assert obj.foo == "hello!"
+    assert obj.bar == 2
+
+
+NON_JSON_HEADERS = [
+    {"Content-Type": "text/plain"},
+    {"Content-Type": "text/plain ; charset=utf-8"},
+    {"Content-Type": "application/octet-stream"},
+    {"Content-Type": "text/html"},
+    {"Content-Type": "application/xml"},
+    {"Content-Type": ""},
+    {},
+]
+
+
+@pytest.mark.parametrize("headers", NON_JSON_HEADERS)
+def test_response_parse_non_json_content_type_strict_error(client: OpenAI, headers: dict[str, str]) -> None:
+    response = APIResponse(
+        raw=httpx2.Response(
+            200,
+            content=b"plain text payload",
+            headers=headers,
+            request=httpx2.Request("GET", "http://localhost/foo"),
+        ),
+        client=client,
+        stream=False,
+        stream_cls=None,
+        cast_to=dict,
+        options=FinalRequestOptions.construct(method="get", url="/foo"),
+    )
+
+    with pytest.raises(APIResponseValidationError):
+        response.parse()
+
+
+@pytest.mark.parametrize("client", [False], indirect=True)  # loose validation
+@pytest.mark.parametrize("headers", NON_JSON_HEADERS)
+def test_response_parse_non_json_content_type_loose_fallback(client: OpenAI, headers: dict[str, str]) -> None:
+    response = APIResponse(
+        raw=httpx2.Response(
+            200,
+            content=b"plain text payload",
+            headers=headers,
+            request=httpx2.Request("GET", "http://localhost/foo"),
+        ),
+        client=client,
+        stream=False,
+        stream_cls=None,
+        cast_to=dict,
+        options=FinalRequestOptions.construct(method="get", url="/foo"),
+    )
+
+    result = response.parse()
+    assert isinstance(result, str)
+    assert result == "plain text payload"
