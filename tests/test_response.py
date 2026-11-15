@@ -6,7 +6,7 @@ import httpx2
 import pytest
 import pydantic
 
-from openai import OpenAI, BaseModel, AsyncOpenAI
+from openai import OpenAI, BaseModel, AsyncOpenAI, APIResponseValidationError
 from openai._response import (
     APIResponse,
     BaseAPIResponse,
