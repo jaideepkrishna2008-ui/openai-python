@@ -153,3 +153,33 @@ def test_response_parse_expect_model_union_non_json_content(client: OpenAI) -> N
     obj = response.parse(to=cast(Any, Union[CustomModel, OtherModel]))
     assert isinstance(obj, str)
     assert obj == "foo"
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "application/json",
+        "Application/JSON",
+        "application/json; charset=utf-8",
+        "application/json ; charset=utf-8",
+        "APPLICATION/JSON; CHARSET=UTF-8",
+        "application/vnd.api+json",
+        "Application/Vnd.Api+JSON ; charset=utf-8",
+    ],
+)
+def test_legacy_response_parse_content_type_casing_and_whitespace(client: OpenAI, content_type: str) -> None:
+    response = LegacyAPIResponse(
+        raw=httpx2.Response(
+            200,
+            content=json.dumps({"foo": "hello!", "bar": 2}),
+            headers={"Content-Type": content_type},
+        ),
+        client=client,
+        stream=False,
+        stream_cls=None,
+        cast_to=dict,
+        options=FinalRequestOptions.construct(method="get", url="/foo"),
+    )
+    result = response.parse(to=dict)
+    assert result == {"foo": "hello!", "bar": 2}
+
